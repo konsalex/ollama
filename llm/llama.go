@@ -291,6 +291,10 @@ func newLlama(model string, adapters []string, runners []ModelRunner, numLayers 
 		params = append(params, "--numa")
 	}
 
+	// create a channel to capture the error from the llama runner process
+	var runnerErr error
+	runnerErrorCh := make(chan error)
+
 	// start the llama.cpp server with a retry in case the port is already in use
 	for _, runner := range runners {
 		if _, err := os.Stat(runner.Path); err != nil {
@@ -307,7 +311,9 @@ func newLlama(model string, adapters []string, runners []ModelRunner, numLayers 
 		)
 		cmd.Env = append(os.Environ(), fmt.Sprintf("LD_LIBRARY_PATH=%s", filepath.Dir(runner.Path)))
 		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+		var stderr bytes.Buffer
+		multiWriter := io.MultiWriter(os.Stderr, &stderr) // Write to both os.Stderr and the buffer to capture errors
+		cmd.Stderr = multiWriter
 
 		llm := &llama{Options: opts, Running: Running{Port: port, Cmd: cmd, Cancel: cancel}}
 
@@ -318,18 +324,19 @@ func newLlama(model string, adapters []string, runners []ModelRunner, numLayers 
 		}
 
 		// monitor the command, it is blocking, so if it exits we need to capture that
-		go func() {
-			err := llm.Cmd.Wait() // this will block until the command exits
-			if err != nil && !llm.Closed {
-				log.Printf("llama runner exited with error: %v", err)
-			} else {
-				log.Printf("llama runner exited")
-			}
-		}()
+		go monitorCommand(llm, &stderr, runnerErrorCh)
 
 		if err := waitForServer(llm); err != nil {
 			log.Printf("error starting llama runner: %v", err)
 			llm.Close()
+
+			// capture the error runner process, if any
+			select {
+			case runnerErr = <-runnerErrorCh:
+			default:
+				// if no error was recieved it may have just timed out
+			}
+
 			// try again
 			continue
 		}
@@ -338,8 +345,30 @@ func newLlama(model string, adapters []string, runners []ModelRunner, numLayers 
 		return llm, nil
 	}
 
+	if runnerErr != nil {
+		// this is the error returned from the llama runner process that failed most recently
+		return nil, runnerErr
+	}
+
 	// if you update this error message, also update the error check in cmd.generate()
 	return nil, fmt.Errorf("failed to start a llama runner")
+}
+
+// monitorCommand is a blocking function that will wait for the external llama process to exit
+func monitorCommand(llm *llama, stderr *bytes.Buffer, errCh chan error) {
+	err := llm.Cmd.Wait() // this blocks until the command exits
+	if err != nil && !llm.Closed {
+		errMsg := "llama runner failed"
+		// parse the last error from the logs
+		parts := strings.Split(stderr.String(), ":")
+		if len(parts) != 0 {
+			errMsg = fmt.Sprintf("%s: %s", errMsg, strings.TrimSpace(parts[len(parts)-1]))
+		}
+		errCh <- fmt.Errorf(errMsg)
+	} else {
+		log.Printf("llama runner exited")
+		errCh <- nil
+	}
 }
 
 func waitForServer(llm *llama) error {
