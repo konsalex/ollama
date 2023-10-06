@@ -479,7 +479,7 @@ func generate(cmd *cobra.Command, model, prompt string, wordWrap bool) error {
 	}
 
 	if err := client.Generate(cancelCtx, &request, fn); err != nil {
-		if strings.Contains(err.Error(), "failed to load model") {
+		if strings.Contains(err.Error(), "failed to start a llama runner") {
 			// tell the user to check the server log, if it exists locally
 			home, nestedErr := os.UserHomeDir()
 			if nestedErr != nil {

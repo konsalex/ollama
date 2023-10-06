@@ -337,6 +337,7 @@ func newLlama(model string, adapters []string, runners []ModelRunner, numLayers 
 		return llm, nil
 	}
 
+	// if you update this error message, also update the error check in cmd.generate()
 	return nil, fmt.Errorf("failed to start a llama runner")
 }
 
