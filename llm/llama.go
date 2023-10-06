@@ -185,6 +185,7 @@ type Running struct {
 type llama struct {
 	api.Options
 	Running
+	Closed bool
 }
 
 var errNoGPU = errors.New("nvidia-smi command failed")
@@ -319,7 +320,7 @@ func newLlama(model string, adapters []string, runners []ModelRunner, numLayers 
 		// monitor the command, it is blocking, so if it exits we need to capture that
 		go func() {
 			err := llm.Cmd.Wait() // this will block until the command exits
-			if err != nil {
+			if err != nil && !llm.Closed {
 				log.Printf("llama runner exited with error: %v", err)
 			} else {
 				log.Printf("llama runner exited")
@@ -368,6 +369,7 @@ func waitForServer(llm *llama) error {
 }
 
 func (llm *llama) Close() {
+	llm.Closed = true
 	llm.Cancel()
 }
 
